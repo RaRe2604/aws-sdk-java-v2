@@ -50,35 +50,38 @@ import software.amazon.awssdk.utils.Logger;
 
 public class BenchmarkRunner {
 
-    private static final List<String> PROTOCOL_BENCHMARKS = Arrays.asList(
-        Ec2ProtocolBenchmark.class.getSimpleName(), JsonProtocolBenchmark.class.getSimpleName(),
-        QueryProtocolBenchmark.class.getSimpleName(), XmlProtocolBenchmark.class.getSimpleName());
+    // private static final List<String> PROTOCOL_BENCHMARKS = Arrays.asList(
+    //     Ec2ProtocolBenchmark.class.getSimpleName(), JsonProtocolBenchmark.class.getSimpleName(),
+    //     QueryProtocolBenchmark.class.getSimpleName(), XmlProtocolBenchmark.class.getSimpleName());
+    //
+    // private static final List<String> ASYNC_BENCHMARKS = Arrays.asList(
+    //     NettyHttpClientH2Benchmark.class.getSimpleName(),
+    //     NettyHttpClientH1Benchmark.class.getSimpleName(),
+    //     AwsCrtClientBenchmark.class.getSimpleName());
+    //
+    // private static final List<String> SYNC_BENCHMARKS = Arrays.asList(
+    //     ApacheHttpClientBenchmark.class.getSimpleName(),
+    //     UrlConnectionHttpClientBenchmark.class.getSimpleName());
+    //
+    // private static final List<String> COLD_START_BENCHMARKS = Arrays.asList(
+    //     V2OptimizedClientCreationBenchmark.class.getSimpleName(),
+    //     V2DefaultClientCreationBenchmark.class.getSimpleName());
+    //
+    // private static final List<String> MAPPER_BENCHMARKS = Arrays.asList(
+    //         EnhancedClientGetOverheadBenchmark.class.getSimpleName(),
+    //         EnhancedClientPutOverheadBenchmark.class.getSimpleName(),
+    //         EnhancedClientGetV1MapperComparisonBenchmark.class.getSimpleName(),
+    //         EnhancedClientPutV1MapperComparisonBenchmark.class.getSimpleName(),
+    //         EnhancedClientUpdateV1MapperComparisonBenchmark.class.getSimpleName(),
+    //         EnhancedClientDeleteV1MapperComparisonBenchmark.class.getSimpleName(),
+    //         EnhancedClientScanV1MapperComparisonBenchmark.class.getSimpleName(),
+    //         EnhancedClientQueryV1MapperComparisonBenchmark.class.getSimpleName()
+    // );
 
-    private static final List<String> ASYNC_BENCHMARKS = Arrays.asList(
-        NettyHttpClientH2Benchmark.class.getSimpleName(),
-        NettyHttpClientH1Benchmark.class.getSimpleName(),
-        AwsCrtClientBenchmark.class.getSimpleName());
+    private static final List<String> NETTY_CHANGE_BENCHMARKS =
+        Arrays.asList(NettyImprovementsBenchmark.class.getSimpleName());
 
-    private static final List<String> SYNC_BENCHMARKS = Arrays.asList(
-        ApacheHttpClientBenchmark.class.getSimpleName(),
-        UrlConnectionHttpClientBenchmark.class.getSimpleName());
-
-    private static final List<String> COLD_START_BENCHMARKS = Arrays.asList(
-        V2OptimizedClientCreationBenchmark.class.getSimpleName(),
-        V2DefaultClientCreationBenchmark.class.getSimpleName());
-
-    private static final List<String> MAPPER_BENCHMARKS = Arrays.asList(
-            EnhancedClientGetOverheadBenchmark.class.getSimpleName(),
-            EnhancedClientPutOverheadBenchmark.class.getSimpleName(),
-            EnhancedClientGetV1MapperComparisonBenchmark.class.getSimpleName(),
-            EnhancedClientPutV1MapperComparisonBenchmark.class.getSimpleName(),
-            EnhancedClientUpdateV1MapperComparisonBenchmark.class.getSimpleName(),
-            EnhancedClientDeleteV1MapperComparisonBenchmark.class.getSimpleName(),
-            EnhancedClientScanV1MapperComparisonBenchmark.class.getSimpleName(),
-            EnhancedClientQueryV1MapperComparisonBenchmark.class.getSimpleName()
-    );
-
-    private static final List<String> METRIC_BENCHMARKS = Arrays.asList(MetricsEnabledBenchmark.class.getSimpleName());
+    // private static final List<String> METRIC_BENCHMARKS = Arrays.asList(MetricsEnabledBenchmark.class.getSimpleName());
 
     private static final Logger log = Logger.loggerFor(BenchmarkRunner.class);
 
@@ -90,19 +93,22 @@ public class BenchmarkRunner {
         this.resultProcessor = new BenchmarkResultProcessor();
     }
 
-    public static void main(String... args) throws RunnerException, JsonProcessingException {
-        List<String> benchmarksToRun = new ArrayList<>();
-        benchmarksToRun.addAll(SYNC_BENCHMARKS);
-        benchmarksToRun.addAll(ASYNC_BENCHMARKS);
-        benchmarksToRun.addAll(PROTOCOL_BENCHMARKS);
-        benchmarksToRun.addAll(COLD_START_BENCHMARKS);
+    public static void main(String... args) throws Throwable {
+        NettyImprovementsBenchmark.main(args);
 
-        log.info(() -> "Skipping tests, to reduce benchmark times: \n" + MAPPER_BENCHMARKS + "\n" + METRIC_BENCHMARKS);
+        // List<String> benchmarksToRun = new ArrayList<>();
+        // benchmarksToRun.addAll(NETTY_CHANGE_BENCHMARKS);
+        // benchmarksToRun.addAll(SYNC_BENCHMARKS);
+        // benchmarksToRun.addAll(ASYNC_BENCHMARKS);
+        // benchmarksToRun.addAll(PROTOCOL_BENCHMARKS);
+        // benchmarksToRun.addAll(COLD_START_BENCHMARKS);
+        //
+        // log.info(() -> "Skipping tests, to reduce benchmark times: \n" + MAPPER_BENCHMARKS + "\n" + METRIC_BENCHMARKS);
 
 
-        BenchmarkRunner runner = new BenchmarkRunner(benchmarksToRun);
-
-        runner.runBenchmark();
+        // BenchmarkRunner runner = new BenchmarkRunner(benchmarksToRun);
+        //
+        // runner.runBenchmark();
     }
 
     private void runBenchmark() throws RunnerException {
