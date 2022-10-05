@@ -70,7 +70,7 @@ public class NettyImprovementsBenchmark {
     }
 
     public static void main(String... args) throws Exception {
-        separateEventLoopCaller();
+        separateThreadPoolCaller();
     }
 
     public static void separateEventLoopCaller() throws Exception {
