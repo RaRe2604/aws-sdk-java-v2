@@ -17,6 +17,7 @@ package software.amazon.awssdk.http.nio.netty.internal;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
 import java.net.InetSocketAddress;
 import software.amazon.awssdk.annotations.SdkInternalApi;
 import software.amazon.awssdk.http.nio.netty.SdkEventLoopGroup;
@@ -48,10 +49,10 @@ public class BootstrapProvider {
      * @return A newly created Bootstrap using the configuration this provider was initialized with, and having an
      * unresolved remote address.
      */
-    public Bootstrap createBootstrap(String host, int port) {
+    public Bootstrap createBootstrap(String host, int port, EventLoopGroup eventLoop) {
         Bootstrap bootstrap =
             new Bootstrap()
-                .group(sdkEventLoopGroup.eventLoopGroup())
+                .group(eventLoop)
                 .channelFactory(sdkEventLoopGroup.channelFactory())
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, nettyConfiguration.connectTimeoutMillis())
                 .option(ChannelOption.SO_KEEPALIVE, nettyConfiguration.tcpKeepAlive())

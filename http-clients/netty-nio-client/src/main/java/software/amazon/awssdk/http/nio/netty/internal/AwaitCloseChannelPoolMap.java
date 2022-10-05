@@ -19,15 +19,20 @@ import static software.amazon.awssdk.http.nio.netty.internal.NettyConfiguration.
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
+import io.netty.channel.EventLoop;
+import io.netty.channel.EventLoopGroup;
 import io.netty.channel.pool.ChannelPool;
 import io.netty.channel.pool.ChannelPoolHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslProvider;
+import io.netty.util.concurrent.EventExecutor;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -83,6 +88,7 @@ public final class AwaitCloseChannelPoolMap extends SdkChannelPoolMap<URI, Simpl
     private final ProxyConfiguration proxyConfiguration;
     private final BootstrapProvider bootstrapProvider;
     private final SslContextProvider sslContextProvider;
+    private final SdkEventLoopGroup sdkEventLoopGroup;
 
     private AwaitCloseChannelPoolMap(Builder builder, Function<Builder, BootstrapProvider> createBootStrapProvider) {
         this.configuration = builder.configuration;
@@ -92,6 +98,7 @@ public final class AwaitCloseChannelPoolMap extends SdkChannelPoolMap<URI, Simpl
         this.initialWindowSize = builder.initialWindowSize;
         this.sslProvider = builder.sslProvider;
         this.proxyConfiguration = builder.proxyConfiguration;
+        this.sdkEventLoopGroup = builder.sdkEventLoopGroup;
         this.bootstrapProvider = createBootStrapProvider.apply(builder);
         this.sslContextProvider = new SslContextProvider(configuration, protocol, sslProvider);
     }
@@ -116,70 +123,80 @@ public final class AwaitCloseChannelPoolMap extends SdkChannelPoolMap<URI, Simpl
     }
 
     @Override
-    protected SimpleChannelPoolAwareChannelPool newPool(URI key) {
+    protected List<SimpleChannelPoolAwareChannelPool> newPool(URI key) {
         SslContext sslContext = needSslContext(key) ? sslContextProvider.sslContext() : null;
 
-        Bootstrap bootstrap = createBootstrap(key);
+        EventLoopGroup eventLoopGroup = sdkEventLoopGroup.eventLoopGroup();
 
-        AtomicReference<ChannelPool> channelPoolRef = new AtomicReference<>();
+        List<SimpleChannelPoolAwareChannelPool> pools = new ArrayList<>();
 
-        ChannelPipelineInitializer pipelineInitializer = new ChannelPipelineInitializer(protocol,
-                                                                                        sslContext,
-                                                                                        sslProvider,
-                                                                                        maxStreams,
-                                                                                        initialWindowSize,
-                                                                                        healthCheckPingPeriod,
-                                                                                        channelPoolRef,
-                                                                                        configuration,
-                                                                                        key);
+        for (EventExecutor eventExecutor : eventLoopGroup) {
+            EventLoop eventLoop = (EventLoop) eventExecutor;
 
-        BetterSimpleChannelPool tcpChannelPool;
-        ChannelPool baseChannelPool;
-        if (shouldUseProxyForHost(key)) {
-            tcpChannelPool = new BetterSimpleChannelPool(bootstrap, NOOP_HANDLER);
-            baseChannelPool = new Http1TunnelConnectionPool(bootstrap.config().group().next(), tcpChannelPool, sslContext,
-                                            proxyAddress(key), proxyConfiguration.username(), proxyConfiguration.password(),
-                                            key, pipelineInitializer, configuration);
-        } else {
-            tcpChannelPool = new BetterSimpleChannelPool(bootstrap, pipelineInitializer);
-            baseChannelPool = tcpChannelPool;
+            Bootstrap bootstrap = createBootstrap(key, eventLoop);
+
+            AtomicReference<ChannelPool> channelPoolRef = new AtomicReference<>();
+
+            ChannelPipelineInitializer pipelineInitializer = new ChannelPipelineInitializer(protocol,
+                                                                                            sslContext,
+                                                                                            sslProvider,
+                                                                                            maxStreams,
+                                                                                            initialWindowSize,
+                                                                                            healthCheckPingPeriod,
+                                                                                            channelPoolRef,
+                                                                                            configuration,
+                                                                                            key);
+
+            BetterSimpleChannelPool tcpChannelPool;
+            ChannelPool baseChannelPool;
+            if (shouldUseProxyForHost(key)) {
+                tcpChannelPool = new BetterSimpleChannelPool(bootstrap, NOOP_HANDLER);
+                baseChannelPool = new Http1TunnelConnectionPool(bootstrap.config().group().next(), tcpChannelPool, sslContext,
+                                                                proxyAddress(key), proxyConfiguration.username(), proxyConfiguration.password(),
+                                                                key, pipelineInitializer, configuration);
+            } else {
+                tcpChannelPool = new BetterSimpleChannelPool(bootstrap, pipelineInitializer);
+                baseChannelPool = tcpChannelPool;
+            }
+
+            SdkChannelPool wrappedPool = wrapBaseChannelPool(bootstrap, baseChannelPool);
+
+            channelPoolRef.set(wrappedPool);
+            pools.add(new SimpleChannelPoolAwareChannelPool(wrappedPool, tcpChannelPool, eventLoop));
         }
 
-        SdkChannelPool wrappedPool = wrapBaseChannelPool(bootstrap, baseChannelPool);
-
-        channelPoolRef.set(wrappedPool);
-        return new SimpleChannelPoolAwareChannelPool(wrappedPool, tcpChannelPool);
+        return pools;
     }
 
     @Override
     public void close() {
-        log.trace(null, () -> "Closing channel pools");
-        // If there is a new pool being added while we are iterating the pools, there might be a
-        // race condition between the close call of the newly acquired pool and eventLoopGroup.shutdown and it
-        // could cause the eventLoopGroup#shutdownGracefully to hang before it times out.
-        // If a new pool is being added while super.close() is running, it might be left open because
-        // the underlying pool map is a ConcurrentHashMap and it doesn't guarantee strong consistency for retrieval
-        // operations. See https://github.com/aws/aws-sdk-java-v2/pull/1200#discussion_r277906715
-        Collection<SimpleChannelPoolAwareChannelPool> channelPools = pools().values();
-        super.close();
-
-        try {
-            CompletableFuture.allOf(channelPools.stream()
-                                                .map(pool -> pool.underlyingSimpleChannelPool().closeFuture())
-                                                .toArray(CompletableFuture[]::new))
-                             .get(CHANNEL_POOL_CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
-        } catch (ExecutionException | TimeoutException e) {
-            throw new RuntimeException(e);
-        }
+        // log.trace(null, () -> "Closing channel pools");
+        // // If there is a new pool being added while we are iterating the pools, there might be a
+        // // race condition between the close call of the newly acquired pool and eventLoopGroup.shutdown and it
+        // // could cause the eventLoopGroup#shutdownGracefully to hang before it times out.
+        // // If a new pool is being added while super.close() is running, it might be left open because
+        // // the underlying pool map is a ConcurrentHashMap and it doesn't guarantee strong consistency for retrieval
+        // // operations. See https://github.com/aws/aws-sdk-java-v2/pull/1200#discussion_r277906715
+        // Collection<SimpleChannelPoolAwareChannelPool> channelPools = pools().values();
+        // super.close();
+        //
+        // try {
+        //     CompletableFuture.allOf(channelPools.stream()
+        //                                         .map(pool -> pool.underlyingSimpleChannelPool().closeFuture())
+        //                                         .toArray(CompletableFuture[]::new))
+        //                      .get(CHANNEL_POOL_CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // } catch (InterruptedException e) {
+        //     Thread.currentThread().interrupt();
+        //     throw new RuntimeException(e);
+        // } catch (ExecutionException | TimeoutException e) {
+        //     throw new RuntimeException(e);
+        // }
     }
 
-    private Bootstrap createBootstrap(URI poolKey) {
+    private Bootstrap createBootstrap(URI poolKey, EventLoopGroup eventLoopGroup) {
         String host = bootstrapHost(poolKey);
         int port = bootstrapPort(poolKey);
-        return bootstrapProvider.createBootstrap(host, port);
+        return bootstrapProvider.createBootstrap(host, port, eventLoopGroup);
     }
 
 

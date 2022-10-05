@@ -50,9 +50,8 @@ import software.amazon.awssdk.http.nio.netty.internal.NettyRequestExecutor;
 import software.amazon.awssdk.http.nio.netty.internal.NonManagedEventLoopGroup;
 import software.amazon.awssdk.http.nio.netty.internal.RequestContext;
 import software.amazon.awssdk.http.nio.netty.internal.SdkChannelOptions;
-import software.amazon.awssdk.http.nio.netty.internal.SdkChannelPool;
-import software.amazon.awssdk.http.nio.netty.internal.SdkChannelPoolMap;
 import software.amazon.awssdk.http.nio.netty.internal.SharedSdkEventLoopGroup;
+import software.amazon.awssdk.http.nio.netty.internal.SimpleChannelPoolAwareChannelPool;
 import software.amazon.awssdk.http.nio.netty.internal.utils.NettyClientLogger;
 import software.amazon.awssdk.utils.AttributeMap;
 import software.amazon.awssdk.utils.Either;
@@ -80,7 +79,7 @@ public final class NettyNioAsyncHttpClient implements SdkAsyncHttpClient {
                     .build();
 
     private final SdkEventLoopGroup sdkEventLoopGroup;
-    private final SdkChannelPoolMap<URI, ? extends SdkChannelPool> pools;
+    private final AwaitCloseChannelPoolMap pools;
     private final NettyConfiguration configuration;
 
     private NettyNioAsyncHttpClient(DefaultBuilder builder, AttributeMap serviceDefaultsMap) {
@@ -108,7 +107,7 @@ public final class NettyNioAsyncHttpClient implements SdkAsyncHttpClient {
 
     @SdkTestInternalApi
     NettyNioAsyncHttpClient(SdkEventLoopGroup sdkEventLoopGroup,
-                            SdkChannelPoolMap<URI, ? extends SdkChannelPool> pools,
+                            AwaitCloseChannelPoolMap pools,
                             NettyConfiguration configuration) {
         this.sdkEventLoopGroup = sdkEventLoopGroup;
         this.pools = pools;
@@ -136,8 +135,8 @@ public final class NettyNioAsyncHttpClient implements SdkAsyncHttpClient {
     }
 
     private RequestContext createRequestContext(AsyncExecuteRequest request) {
-        SdkChannelPool pool = pools.get(poolKey(request.request()));
-        return new RequestContext(pool, sdkEventLoopGroup.eventLoopGroup(), request, configuration);
+        SimpleChannelPoolAwareChannelPool pool = pools.get(poolKey(request.request()));
+        return new RequestContext(pool, pool.eventLoop(), request, configuration);
     }
 
     private SdkEventLoopGroup eventLoopGroup(DefaultBuilder builder) {

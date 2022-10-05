@@ -23,10 +23,13 @@ import java.io.Closeable;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ThreadLocalRandom;
 import software.amazon.awssdk.annotations.SdkInternalApi;
+import software.amazon.awssdk.utils.Pair;
 
 /**
  * Replacement for {@link io.netty.channel.pool.AbstractChannelPoolMap}. This implementation guarantees
@@ -34,14 +37,25 @@ import software.amazon.awssdk.annotations.SdkInternalApi;
  */
 // TODO do we need to use this for H2?
 @SdkInternalApi
-public abstract class SdkChannelPoolMap<K, P extends ChannelPool>
+public abstract class SdkChannelPoolMap<K, P extends SimpleChannelPoolAwareChannelPool>
         implements ChannelPoolMap<K, P>, Iterable<Map.Entry<K, P>>, Closeable {
 
-    private final ConcurrentMap<K, P> map = new ConcurrentHashMap<>();
+    private final ConcurrentMap<K, List<P>> poolsMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Pair<K, Thread>, P> map = new ConcurrentHashMap<>();
 
     @Override
     public final P get(K key) {
-        return map.computeIfAbsent(key, this::newPool);
+        return map.computeIfAbsent(Pair.of(key, Thread.currentThread()), this::createPools);
+    }
+
+    private P createPools(Pair<K, Thread> key) {
+        List<P> pools = poolsMap.computeIfAbsent(key.left(), this::newPool);
+        for (P pool : pools) {
+            if (pool.eventLoop().inEventLoop()) {
+                return pool;
+            }
+        }
+        return pools.get(ThreadLocalRandom.current().nextInt(0, pools.size() - 1));
     }
 
     /**
@@ -51,51 +65,52 @@ public abstract class SdkChannelPoolMap<K, P extends ChannelPool>
      * Please note that {@code null} keys are not allowed.
      */
     public final boolean remove(K key) {
-        P pool = map.remove(paramNotNull(key, "key"));
-        if (pool != null) {
-            pool.close();
-            return true;
-        }
+        // P pool = poolsMap.remove(paramNotNull(key, "key"));
+        // if (pool != null) {
+        //     pool.close();
+        //     return true;
+        // }
         return false;
     }
 
     @Override
     public final Iterator<Map.Entry<K, P>> iterator() {
-        return new ReadOnlyIterator<>(map.entrySet().iterator());
+        throw new UnsupportedOperationException();
+        // return new ReadOnlyIterator<>(poolsMap.entrySet().iterator());
     }
 
     /**
      * Returns the number of {@link ChannelPool}s currently in this {@link io.netty.channel.pool.AbstractChannelPoolMap}.
      */
     public final int size() {
-        return map.size();
+        return poolsMap.size();
     }
 
     /**
      * Returns {@code true} if the {@link io.netty.channel.pool.AbstractChannelPoolMap} is empty, otherwise {@code false}.
      */
     public final boolean isEmpty() {
-        return map.isEmpty();
+        return poolsMap.isEmpty();
     }
 
     @Override
     public final boolean contains(K key) {
-        return map.containsKey(paramNotNull(key, "key"));
+        return poolsMap.containsKey(paramNotNull(key, "key"));
     }
 
     /**
      * Called once a new {@link ChannelPool} needs to be created as non exists yet for the {@code key}.
      */
-    protected abstract P newPool(K key);
+    protected abstract List<P> newPool(K key);
 
     @Override
     public void close() {
-        map.keySet().forEach(this::remove);
+        poolsMap.keySet().forEach(this::remove);
     }
 
-    public final Map<K, P> pools() {
-        return Collections.unmodifiableMap(new HashMap<>(map));
-    }
+    // public final Map<K, P> pools() {
+    //     return Collections.unmodifiableMap(new HashMap<>(poolsMap));
+    // }
 
     /**
      * {@link Iterator} that prevents removal.
