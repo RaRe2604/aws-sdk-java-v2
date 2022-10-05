@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 import software.amazon.awssdk.core.client.config.SdkAdvancedAsyncClientOption;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
@@ -69,10 +70,11 @@ public class NettyImprovementsBenchmark {
     }
 
     public static void main(String... args) throws Exception {
-        separateThreadPoolCaller();
+        separateEventLoopCaller();
     }
 
-    public static void separateEventLoopCaller() {
+    public static void separateEventLoopCaller() throws Exception {
+        NioEventLoopGroup newEventLoopGroup = new NioEventLoopGroup();
         NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
         SdkEventLoopGroup separateEventLoop = SdkEventLoopGroup.create(eventLoopGroup);
         NettyNioAsyncHttpClient.Builder separateEventLoopNetty =
@@ -83,11 +85,76 @@ public class NettyImprovementsBenchmark {
                                                      .httpClientBuilder(separateEventLoopNetty)
                                                      .asyncConfiguration(c -> c.advancedOption(SdkAdvancedAsyncClientOption.FUTURE_COMPLETION_EXECUTOR, Runnable::run))
                                                      .build();
+
+        Semaphore requestLimiter = new Semaphore(MAX_CONCURRENCY);
+
+        Instant warmStart = Instant.now();
+        Instant warmEnd = warmStart.plus(WARMUP_DURATION);
+
+        System.out.println("Warming separateEventLoopCaller until " + warmEnd);
+        while (Instant.now().isBefore(warmEnd)) {
+            requestLimiter.acquire();
+            newEventLoopGroup.execute(() -> {
+                try {
+                    getItem(ddb).handle((r, t) -> {
+                        requestLimiter.release();
+                        return null;
+                    });
+                } catch (Throwable t) {
+                    requestLimiter.release();
+                }
+            });
+        }
+
+        requestLimiter.acquire(MAX_CONCURRENCY);
+        requestLimiter.release(MAX_CONCURRENCY);
+
+        Instant start = Instant.now();
+        Instant end = start.plus(TEST_DURATION);
+        Instant lastLog = Instant.now();
+        AtomicLong requestsSuccess = new AtomicLong(0);
+        AtomicLong requestsFailed = new AtomicLong(0);
+
+        System.out.println("Running separateEventLoopCaller until " + end);
+        while (Instant.now().isBefore(end)) {
+            if (Duration.between(lastLog, Instant.now()).getSeconds() >= 10) {
+                Duration currentDuration = Duration.between(start, Instant.now());
+                System.out.println("TPS: " + (requestsSuccess.get() * 1.0 / currentDuration.getSeconds()) +
+                                   ", Avg Latency: " + (currentDuration.toMillis() * 1.0 / requestsSuccess.get()) + " ms" +
+                                   ", Failures: " + requestsFailed.get());
+                lastLog = Instant.now();
+            }
+
+            requestLimiter.acquire();
+            newEventLoopGroup.execute(() -> {
+                try {
+                    getItem(ddb).handle((r, t) -> {
+                        requestLimiter.release();
+                        if (t != null) {
+                            requestsFailed.incrementAndGet();
+                        } else {
+                            requestsSuccess.incrementAndGet();
+                        }
+                        return null;
+                    });
+                } catch (Exception e) {
+                    requestsFailed.incrementAndGet();
+                    requestLimiter.release();
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                    requestsFailed.incrementAndGet();
+                    requestLimiter.release();
+                }
+            });
+        }
+
+        eventLoopGroup.shutdownGracefully();
+        newEventLoopGroup.shutdownGracefully();
     }
 
     public static void sameEventLoopCaller() {
-        NioEventLoopGroup sharedEventLoopGroup = new NioEventLoopGroup();
-        SdkEventLoopGroup sharedEventLoop = SdkEventLoopGroup.create(sharedEventLoopGroup);
+        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
+        SdkEventLoopGroup sharedEventLoop = SdkEventLoopGroup.create(eventLoopGroup);
         NettyNioAsyncHttpClient.Builder sharedEventLoopNetty =
             NettyNioAsyncHttpClient.builder()
                                    .eventLoopGroup(sharedEventLoop)
