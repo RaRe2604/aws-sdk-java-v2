@@ -70,13 +70,25 @@ public class NettyImprovementsBenchmark {
     }
 
     public static void main(String... args) throws Exception {
-        separateEventLoopCaller();
+        sameEventLoopCaller();
     }
 
     public static void separateEventLoopCaller() throws Exception {
         NioEventLoopGroup newEventLoopGroup = new NioEventLoopGroup();
         NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
-        SdkEventLoopGroup separateEventLoop = SdkEventLoopGroup.create(eventLoopGroup);
+        eventLoopTest(newEventLoopGroup, eventLoopGroup, "separateEventLoopCaller");
+        eventLoopGroup.shutdownGracefully();
+        newEventLoopGroup.shutdownGracefully();
+    }
+
+    public static void sameEventLoopCaller() throws Exception {
+        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
+        eventLoopTest(eventLoopGroup, eventLoopGroup, "sameEventLoopCaller");
+        eventLoopGroup.shutdownGracefully();
+    }
+
+    private static void eventLoopTest(NioEventLoopGroup callerGroup, NioEventLoopGroup nettyGroup, String test) throws InterruptedException {
+        SdkEventLoopGroup separateEventLoop = SdkEventLoopGroup.create(nettyGroup);
         NettyNioAsyncHttpClient.Builder separateEventLoopNetty =
             NettyNioAsyncHttpClient.builder()
                                    .eventLoopGroup(separateEventLoop)
@@ -91,10 +103,10 @@ public class NettyImprovementsBenchmark {
         Instant warmStart = Instant.now();
         Instant warmEnd = warmStart.plus(WARMUP_DURATION);
 
-        System.out.println("Warming separateEventLoopCaller until " + warmEnd);
+        System.out.println("Warming " + test + " until " + warmEnd);
         while (Instant.now().isBefore(warmEnd)) {
             requestLimiter.acquire();
-            newEventLoopGroup.execute(() -> {
+            callerGroup.execute(() -> {
                 try {
                     getItem(ddb).handle((r, t) -> {
                         requestLimiter.release();
@@ -115,7 +127,7 @@ public class NettyImprovementsBenchmark {
         AtomicLong requestsSuccess = new AtomicLong(0);
         AtomicLong requestsFailed = new AtomicLong(0);
 
-        System.out.println("Running separateEventLoopCaller until " + end);
+        System.out.println("Running " + test + " until " + end);
         while (Instant.now().isBefore(end)) {
             if (Duration.between(lastLog, Instant.now()).getSeconds() >= 10) {
                 Duration currentDuration = Duration.between(start, Instant.now());
@@ -126,7 +138,7 @@ public class NettyImprovementsBenchmark {
             }
 
             requestLimiter.acquire();
-            newEventLoopGroup.execute(() -> {
+            callerGroup.execute(() -> {
                 try {
                     getItem(ddb).handle((r, t) -> {
                         requestLimiter.release();
@@ -147,22 +159,6 @@ public class NettyImprovementsBenchmark {
                 }
             });
         }
-
-        eventLoopGroup.shutdownGracefully();
-        newEventLoopGroup.shutdownGracefully();
-    }
-
-    public static void sameEventLoopCaller() {
-        NioEventLoopGroup eventLoopGroup = new NioEventLoopGroup();
-        SdkEventLoopGroup sharedEventLoop = SdkEventLoopGroup.create(eventLoopGroup);
-        NettyNioAsyncHttpClient.Builder sharedEventLoopNetty =
-            NettyNioAsyncHttpClient.builder()
-                                   .eventLoopGroup(sharedEventLoop)
-                                   .maxConcurrency(MAX_CONCURRENCY);
-        DynamoDbAsyncClient ddb = DynamoDbAsyncClient.builder()
-                                                     .httpClientBuilder(sharedEventLoopNetty)
-                                                     .asyncConfiguration(c -> c.advancedOption(SdkAdvancedAsyncClientOption.FUTURE_COMPLETION_EXECUTOR, Runnable::run))
-                                                     .build();
     }
 
     public static void separateThreadPoolCaller() throws Exception {
